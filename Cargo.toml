@@ -1,0 +1,44 @@
+[package]
+name = "stm32"
+version = "0.1.0"
+authors = ["Thomas Vijverberg <thomas@vijverb.nl>"]
+description = "Sensor reading and USB Serial with RTIC"
+categories = ["embedded", "no-std"]
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+cortex-m-rtic = "1.1.3"
+# embedded-hal = "=1.0.0-alpha.8"
+embedded-hal = "0.2.1"
+nb = "1.0.0"
+usb-device = "0.2.8"
+usbd-serial = "0.1.1"
+bme280 = "0.3.0" 
+# bme280 = {git = "https://github.com/tvijverb/bme280-rs"}
+stm32f1xx-hal = { version = "0.9.0", features = ["rt", "stm32f103", "medium"] }
+rtt-target = { version = "0.3.1", features = ["cortex-m"] }
+panic-rtt-target = { version = "0.1.0", features = ["cortex-m"] }
+
+# alternate panic impls, choose only one!
+#   panic-halt
+#   panic-semihosting # requires cortex-m-semihosting
+#   panic-itm
+#   panic-abort
+#   panic-ramdump
+#   panic-persist
+
+[[bin]]
+name = "stm32"
+test = false
+bench = false
+
+[profile.dev.package."*"] # +
+opt-level = 3 # +
+
+[profile.release]
+lto = true
+codegen-units = 1
+debug = true
+opt-level = 3
