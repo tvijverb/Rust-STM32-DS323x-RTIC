@@ -183,23 +183,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "esp32"
-version = "0.1.0"
-dependencies = [
- "bme280",
- "cortex-m",
- "cortex-m-rt",
- "cortex-m-rtic",
- "embedded-hal",
- "nb 1.0.0",
- "panic-rtt-target",
- "rtt-target",
- "stm32f1xx-hal",
- "usb-device",
- "usbd-serial",
-]
-
-[[package]]
 name = "fugit"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -491,6 +474,23 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "stm32"
+version = "0.1.0"
+dependencies = [
+ "bme280",
+ "cortex-m",
+ "cortex-m-rt",
+ "cortex-m-rtic",
+ "embedded-hal",
+ "nb 1.0.0",
+ "panic-rtt-target",
+ "rtt-target",
+ "stm32f1xx-hal",
+ "usb-device",
+ "usbd-serial",
+]
 
 [[package]]
 name = "stm32-usbd"
