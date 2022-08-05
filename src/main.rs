@@ -224,7 +224,7 @@ mod app {
     }
 
     #[idle(local = [x: u32 = 0])]
-    fn idle(cx: idle::Context) -> ! {
+    fn idle(_: idle::Context) -> ! {
         // Locals in idle have lifetime 'static
         // Now Wait For Interrupt is used instead of a busy-wait loop
         // to allow MCU to sleep between interrupts

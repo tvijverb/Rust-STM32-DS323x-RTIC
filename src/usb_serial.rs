@@ -18,8 +18,8 @@ pub fn usb_poll<B: usb_device::bus::UsbBus>(
                     *c &= !0x20;
                 }
             }
-
-            serial.write(&buf[0..count]).ok();
+            // Disable echo back
+            //serial.write(&buf[0..count]).ok();
         }
         _ => {}
     }
