@@ -30,7 +30,7 @@ mod app {
     use panic_halt as _;
     // use panic_rtt_target as _;
     // use rtt_target::{rprintln, rtt_init_print};
-    use cortex_m::asm::delay;
+    use cortex_m::asm::{delay, wfi};
     use stm32f1xx_hal::pac;
     use stm32f1xx_hal::i2c::{BlockingI2c, Mode, DutyCycle};
     use stm32f1xx_hal::prelude::*;
@@ -59,7 +59,7 @@ mod app {
     fn init(mut cx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init buffers for debug printing
         // rtt_init_print!();
-        // rprintln!("Rust RTIC USB Serial communication");  
+
         // Allocator setup
         {
             use core::mem::MaybeUninit;
@@ -89,39 +89,6 @@ mod app {
         // use GPIO A for USB, GPIO B for I2C_1
         let mut gpioa = cx.device.GPIOA.split();
         let mut gpiob = cx.device.GPIOB.split();
-
-        // RESET USB_D+ to force reconnect
-        let mut usb_dp = gpioa.pa12.into_push_pull_output(&mut gpioa.crh);
-        usb_dp.set_low();
-        delay(clocks.sysclk().raw() / 100);
-
-        // SET USB pins
-        let usb_dm = gpioa.pa11;
-        let usb_dp = usb_dp.into_floating_input(&mut gpioa.crh);
-
-        let usb = Peripheral {
-            usb: cx.device.USB,
-            pin_dm: usb_dm,
-            pin_dp: usb_dp,
-        };
-
-        unsafe {
-            USB_BUS.replace(UsbBus::new(usb));
-        }
-
-
-        // Create Serial device
-        let serial = usbd_serial::SerialPort::new(unsafe { USB_BUS.as_ref().unwrap() });
-
-        let usb_dev = UsbDeviceBuilder::new(
-            unsafe { USB_BUS.as_ref().unwrap() },
-            UsbVidPid(0x16c0, 0x27dd),
-        )
-        .manufacturer("Datastem")
-        .product("Datastem Serial port")
-        .serial_number("1")
-        .device_class(usbd_serial::USB_CLASS_CDC)
-        .build();
 
         // Timer handler for periodic tasks
         // rprintln!("Setting timer function");
@@ -160,6 +127,39 @@ mod app {
         // rtc.set_datetime(&datetime).unwrap();
         rtc.enable().unwrap(); // set clock to run    
         // rprintln!("Init done!");
+
+        // RESET USB_D+ to force reconnect
+        let mut usb_dp = gpioa.pa12.into_push_pull_output(&mut gpioa.crh);
+        usb_dp.set_low();
+        delay(clocks.sysclk().raw() / 100);
+
+        // SET USB pins
+        let usb_dm = gpioa.pa11;
+        let usb_dp = usb_dp.into_floating_input(&mut gpioa.crh);
+
+        let usb = Peripheral {
+            usb: cx.device.USB,
+            pin_dm: usb_dm,
+            pin_dp: usb_dp,
+        };
+
+        unsafe {
+            USB_BUS.replace(UsbBus::new(usb));
+        }
+
+
+        // Create Serial device
+        let serial = usbd_serial::SerialPort::new(unsafe { USB_BUS.as_ref().unwrap() });
+
+        let usb_dev = UsbDeviceBuilder::new(
+            unsafe { USB_BUS.as_ref().unwrap() },
+            UsbVidPid(0x16c0, 0x27dd),
+        )
+        .manufacturer("Datastem")
+        .product("Datastem Serial port")
+        .serial_number("1")
+        .device_class(usbd_serial::USB_CLASS_CDC)
+        .build();
 
         // return shared resources
         (Shared { usb_dev, serial}, Local {timer_handler: timer, rtc}, init::Monotonics())
@@ -221,5 +221,16 @@ mod app {
 
         // Clears the update flag
         cx.local.timer_handler.clear_interrupt(Event::Update);
+    }
+
+    #[idle(local = [x: u32 = 0])]
+    fn idle(cx: idle::Context) -> ! {
+        // Locals in idle have lifetime 'static
+        // Now Wait For Interrupt is used instead of a busy-wait loop
+        // to allow MCU to sleep between interrupts
+        // https://developer.arm.com/documentation/ddi0406/c/Application-Level-Architecture/Instruction-Details/Alphabetical-list-of-instructions/WFI
+        loop {
+            wfi();
+        }
     }
 }
