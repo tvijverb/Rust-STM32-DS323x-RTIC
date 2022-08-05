@@ -4,20 +4,35 @@
 #![no_main]
 #![no_std]
 #![allow(non_snake_case)]
+#![feature(alloc_error_handler)]
+
+#[macro_use]
+extern crate alloc;
 
 
 // use panic_halt as _;
 // use panic_semihosting as _;
 mod usb_serial;
 use rtic::app;
+use alloc_cortex_m::CortexMHeap;
+use core::alloc::Layout;
+
+#[global_allocator]
+static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
+
+#[alloc_error_handler]
+fn oom(_: Layout) -> ! {
+    loop {}
+}
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
 mod app {
-    use panic_rtt_target as _;
-    use rtt_target::{rprintln, rtt_init_print};
+    use panic_halt as _;
+    // use panic_rtt_target as _;
+    // use rtt_target::{rprintln, rtt_init_print};
     use cortex_m::asm::delay;
     use stm32f1xx_hal::pac;
-    use stm32f1xx_hal::i2c::{I2c, BlockingI2c, DutyCycle, Mode};
+    use stm32f1xx_hal::i2c::{I2c, BlockingI2c, Mode};
     use stm32f1xx_hal::prelude::*;
     use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
     use stm32f1xx_hal::timer::{Event, CounterMs};
@@ -25,7 +40,9 @@ mod app {
     use stm32f1xx_hal::gpio::gpiob::{PB6, PB7};
     use stm32f1xx_hal::pac::{I2C1, TIM2};
     use usb_device::prelude::*;
-    use bme280::i2c::{BME280};
+    use ds323x::{Ds323x, NaiveDate, DateTimeAccess, interface::I2cInterface};
+    use alloc::vec::Vec;
+    use core::panic::PanicInfo;
 
     #[shared]
     struct Shared {
@@ -33,23 +50,25 @@ mod app {
         serial: usbd_serial::SerialPort<'static, UsbBusType>,
     }
 
+
     #[local]
     struct Local {
         timer_handler: CounterMs<pac::TIM1>,
-        bme: BME280<BlockingI2c<I2C1, (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>)>, stm32f1xx_hal::timer::Delay<TIM2, 1000000>>,
+        rtc: Ds323x<I2cInterface<BlockingI2c<I2C1, (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>)>>,ds323x::ic::DS3231>
     }
 
     #[init]
-    fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
+    fn init(mut cx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init buffers for debug printing
-        rtt_init_print!();
-        rprintln!("Rust RTIC USB Serial communication");
-
-        // Get access to the device specific peripherals from the peripheral access crate
-        // let cp = cortex_m::Peripherals::take().unwrap();
-        // let dp = pac::Peripherals::take().unwrap();
-        // let dp = pac::Peripherals::take().unwrap();
-        
+        // rtt_init_print!();
+        // rprintln!("Rust RTIC USB Serial communication");  
+        // Allocator setup
+        {
+            use core::mem::MaybeUninit;
+            const HEAP_SIZE: usize = 1024;
+            static mut HEAP: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+            unsafe { super::ALLOCATOR.init(HEAP.as_ptr() as usize, HEAP_SIZE) }
+        }      
 
         // USB Bus Setup
         static mut USB_BUS: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None;
@@ -107,86 +126,104 @@ mod app {
         .build();
 
         // Timer handler for periodic tasks
-        rprintln!("Setting timer function");
+        // rprintln!("Setting timer function");
 
         // cx.device.TIM1.counter_ms
         let mut timer = cx.device.TIM1.counter_ms(&clocks);
         timer.start(1.secs()).unwrap();
         timer.listen(Event::Update);
 
-        // BME280 I2C Pressure Sensor
+        // I2c setup
+        cx.core.DCB.enable_trace();
+        cx.core.DWT.enable_cycle_counter();
+
         let scl = gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl);
         let sda = gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl);
 
-        let i2c = I2c::i2c1(
+        let i2c = BlockingI2c::i2c1(
             cx.device.I2C1,
             (scl, sda),
             &mut afio.mapr,
-            Mode::Fast {
-                frequency: 400_000.Hz(),
-                duty_cycle: DutyCycle::Ratio16to9
+            Mode::Standard {
+                frequency: 400000.Hz(),
             },
-            clocks).blocking_default(clocks);
+            clocks,
+            5000,
+            10,
+            5000,
+            5000
+        );
 
-        //Initialize the sensor
-        let delay = cx.device.TIM2.delay_us(&clocks);
-        // let mut bme = BME280::new_secondary(i2c, delay);
-        let mut bme = BME280::new_primary(i2c, delay);
-        
-        let bme_init_result = bme.init().map_err(|e| {
-            rprintln!("Could not initialize bme280, {:?}", e);
-            panic!();
-        })
-        .unwrap();
-        rprintln!("{:?}", bme_init_result);
-        rprintln!("Init done!");
+        //Initialize the DS3231 I2C sensor
+        let mut rtc = Ds323x::new_ds3231(i2c);
+        // Optionally set Datetime
+        // let datetime = NaiveDate::from_ymd(2022, 8, 5).and_hms(17, 41, 00);
+        // rtc.set_datetime(&datetime).unwrap();
+        rtc.enable().unwrap(); // set clock to run    
+        // rprintln!("Init done!");
 
         // return shared resources
-        (Shared { usb_dev, serial}, Local {timer_handler: timer, bme: bme}, init::Monotonics())
+        (Shared { usb_dev, serial}, Local {timer_handler: timer, rtc}, init::Monotonics())
     }
 
     // USB TRANSMIT
-    // #[task(binds = USB_HP_CAN_TX, shared = [usb_dev, serial])]
-    // fn usb_tx(cx: usb_tx::Context) {
-    //     let mut usb_dev = cx.shared.usb_dev;
-    //     let mut serial = cx.shared.serial;
+    #[task(binds = USB_HP_CAN_TX, shared = [usb_dev, serial])]
+    fn usb_tx(cx: usb_tx::Context) {
+        let mut usb_dev = cx.shared.usb_dev;
+        let mut serial = cx.shared.serial;
 
-    //     (&mut usb_dev, &mut serial).lock(|usb_dev, serial| {
-    //         super::usb_serial::usb_poll(usb_dev, serial);
-    //     });
-    // }
+        (&mut usb_dev, &mut serial).lock(|usb_dev, serial| {
+            super::usb_serial::usb_poll(usb_dev, serial);
+        });
+    }
 
-    // // USB RECIEVE
-    // #[task(binds = USB_LP_CAN_RX0, shared = [usb_dev, serial])]
-    // fn usb_rx0(cx: usb_rx0::Context) {
-    //     let mut usb_dev = cx.shared.usb_dev;
-    //     let mut serial = cx.shared.serial;
+    // USB RECIEVE
+    #[task(binds = USB_LP_CAN_RX0, shared = [usb_dev, serial])]
+    fn usb_rx0(cx: usb_rx0::Context) {
+        let mut usb_dev = cx.shared.usb_dev;
+        let mut serial = cx.shared.serial;
 
-    //     (&mut usb_dev, &mut serial).lock(|usb_dev, serial| {
-    //         super::usb_serial::usb_poll(usb_dev, serial);
-    //     });
-    // }
+        (&mut usb_dev, &mut serial).lock(|usb_dev, serial| {
+            super::usb_serial::usb_poll(usb_dev, serial);
+        });
+    }
 
     // Period task
-    #[task(binds = TIM1_UP, priority = 1, local = [bme, timer_handler, count: u8 = 0])]
+    #[task(binds = TIM1_UP, priority = 1, local = [rtc, timer_handler, count: u8 = 0], shared = [usb_dev, serial])]
     fn tick(cx: tick::Context) {
         // Depending on the application, you could want to delegate some of the work done here to
         // the idle task if you want to minimize the latency of interrupts with same priority (if
         // you have any). That could be done
         // Count used to change the timer update frequency
-        rprintln!("Period task! {}", *cx.local.count);
+        // rprintln!("Periodic Task #{}", *cx.local.count);
         *cx.local.count += 1;
 
-        // BME280 Measurement
-        let bme = cx.local.bme;
-        match bme.measure() {
-            Ok(measurements) => {
-                rprintln!("Relative Humidity = {}%", measurements.humidity);
-                rprintln!("Temperature = {} deg C", measurements.temperature);
-                rprintln!("Pressure = {} pascals", measurements.pressure);
+        let mut usb_dev = cx.shared.usb_dev;
+        let mut serial = cx.shared.serial;
+
+        // DS3231 Measurement
+        let rtc = cx.local.rtc;
+        match rtc.temperature() {
+            Ok(temperature) => {
+                // let mut buf = [0u8; 64];
+                (&mut usb_dev, &mut serial).lock(|usb_dev, serial| {
+                    let str_temp = format!("Current temperature = {}\r\n", temperature);
+                    serial.write(str_temp.as_bytes()).ok();
+                });
             }
             Err(_) => {
-                rprintln!("Could not read bme280 due to error");
+                // rprintln!("Could not read bme280 due to error");
+            }
+        }
+        match rtc.datetime() {
+            Ok(datetime) => {
+                (&mut usb_dev, &mut serial).lock(|usb_dev, serial| {
+                    let str_temp = format!("Current datetime = {}\r\n", datetime);
+                    serial.write(str_temp.as_bytes()).ok();
+                });
+            }
+            Err(_) => {
+                // rprintln!("Could not read bme280 due to error");
             }
         }
 
