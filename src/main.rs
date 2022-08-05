@@ -32,17 +32,15 @@ mod app {
     // use rtt_target::{rprintln, rtt_init_print};
     use cortex_m::asm::delay;
     use stm32f1xx_hal::pac;
-    use stm32f1xx_hal::i2c::{I2c, BlockingI2c, Mode};
+    use stm32f1xx_hal::i2c::{BlockingI2c, Mode, DutyCycle};
     use stm32f1xx_hal::prelude::*;
     use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
     use stm32f1xx_hal::timer::{Event, CounterMs};
     use stm32f1xx_hal::gpio::{Alternate, OpenDrain};
     use stm32f1xx_hal::gpio::gpiob::{PB6, PB7};
-    use stm32f1xx_hal::pac::{I2C1, TIM2};
+    use stm32f1xx_hal::pac::{I2C1};
     use usb_device::prelude::*;
-    use ds323x::{Ds323x, NaiveDate, DateTimeAccess, interface::I2cInterface};
-    use alloc::vec::Vec;
-    use core::panic::PanicInfo;
+    use ds323x::{Ds323x, DateTimeAccess, interface::I2cInterface};
 
     #[shared]
     struct Shared {
@@ -130,7 +128,7 @@ mod app {
 
         // cx.device.TIM1.counter_ms
         let mut timer = cx.device.TIM1.counter_ms(&clocks);
-        timer.start(1.secs()).unwrap();
+        timer.start(60.secs()).unwrap();
         timer.listen(Event::Update);
 
         // I2c setup
@@ -144,8 +142,9 @@ mod app {
             cx.device.I2C1,
             (scl, sda),
             &mut afio.mapr,
-            Mode::Standard {
+            Mode::Fast {
                 frequency: 400000.Hz(),
+                duty_cycle: DutyCycle::Ratio16to9
             },
             clocks,
             5000,
@@ -189,16 +188,13 @@ mod app {
     }
 
     // Period task
-    #[task(binds = TIM1_UP, priority = 1, local = [rtc, timer_handler, count: u8 = 0], shared = [usb_dev, serial])]
+    #[task(binds = TIM1_UP, priority = 1, local = [rtc, timer_handler, count: u8 = 0], shared = [serial])]
     fn tick(cx: tick::Context) {
-        // Depending on the application, you could want to delegate some of the work done here to
-        // the idle task if you want to minimize the latency of interrupts with same priority (if
-        // you have any). That could be done
         // Count used to change the timer update frequency
         // rprintln!("Periodic Task #{}", *cx.local.count);
         *cx.local.count += 1;
 
-        let mut usb_dev = cx.shared.usb_dev;
+        // let mut usb_dev = cx.shared.usb_dev;
         let mut serial = cx.shared.serial;
 
         // DS3231 Measurement
@@ -206,25 +202,21 @@ mod app {
         match rtc.temperature() {
             Ok(temperature) => {
                 // let mut buf = [0u8; 64];
-                (&mut usb_dev, &mut serial).lock(|usb_dev, serial| {
+                (&mut serial).lock(|serial| {
                     let str_temp = format!("Current temperature = {}\r\n", temperature);
                     serial.write(str_temp.as_bytes()).ok();
                 });
             }
-            Err(_) => {
-                // rprintln!("Could not read bme280 due to error");
-            }
+            Err(_) => { }
         }
         match rtc.datetime() {
             Ok(datetime) => {
-                (&mut usb_dev, &mut serial).lock(|usb_dev, serial| {
+                (&mut serial).lock(|serial| {
                     let str_temp = format!("Current datetime = {}\r\n", datetime);
                     serial.write(str_temp.as_bytes()).ok();
                 });
             }
-            Err(_) => {
-                // rprintln!("Could not read bme280 due to error");
-            }
+            Err(_) => { }
         }
 
         // Clears the update flag
